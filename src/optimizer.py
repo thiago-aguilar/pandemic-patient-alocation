@@ -219,7 +219,7 @@ class PortfolioOptimizer:
                 for a in self.model_sets['A'] 
                 for h in self.model_sets['H']
              ],
-            vtype=GRB.CONTINUOUS,
+            vtype=GRB.BINARY,
             name="Y",
             lb=0
         )
@@ -275,6 +275,7 @@ class PortfolioOptimizer:
                         )
                     
         # Constraint 4 - Maximum capacity of resources at hospitals
+
         breakpoint()
                     
 
