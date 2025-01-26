@@ -1,7 +1,6 @@
 import pandas as pd
 import json
 from abc import abstractmethod
-from src.load_data import carregar_estoque, carregar_custos_transporte, carregar_obras
 import numpy as np
 
 from gurobipy import Model, GRB, quicksum
@@ -10,7 +9,7 @@ import copy
 import os
 import shutil
 
-class PortfolioOptimizer:
+class PandemicAlocationOptimizer:
 
     def __init__(self, data_path):
         """
@@ -92,7 +91,7 @@ class PortfolioOptimizer:
         patient_type_columns_name = 'Tipo_de_paciente'
         model_sets['P'] = self.get_set_from_inputs(patient_type_sheets, patient_type_columns_name)
 
-        # Sr - Tipos de pacientes (os mesmos tipos do set P) que demandam o recurso r
+        # S_r[r] - Tipos de pacientes (os mesmos tipos do set P) que demandam o recurso r
         filtro_recurso = self.tipo_paciente_recurso_df['Usa_recurso'] == 1
         model_sets['S_r'] = (
             self.tipo_paciente_recurso_df
@@ -230,7 +229,7 @@ class PortfolioOptimizer:
     def create_constraints(self):
 
         # Constraint 1 - All patients demand need to be allocated to hospitals
-        print('Creating constraint 1')
+        print('Creating constraint 1 - Patients Demand')
         for p in tqdm(self.model_sets['P']):
             for a in self.model_sets['A']:
                 for t in self.model_sets['T']:
@@ -240,7 +239,7 @@ class PortfolioOptimizer:
                     )
         
         # Constraint 2 - Patient flow at initial day
-        print('Criando restrição 2')
+        print('Creating Constraint 2 - Patient flow at initial day')
         for p in tqdm(self.model_sets['P']):
             for h in self.model_sets['H']:               
                 LHS = self.vars['N'][p,h,1]
@@ -256,6 +255,7 @@ class PortfolioOptimizer:
                     )
                 
         # Constraint 3 - Patient flow for all other days
+        print('Creating Constraint 3 - Patient flow for all other days')
         for p in tqdm(self.model_sets['P']):
             for h in self.model_sets['H']:
                 for t in self.model_sets['T']:
@@ -275,7 +275,14 @@ class PortfolioOptimizer:
                         )
                     
         # Constraint 4 - Maximum capacity of resources at hospitals
-
+        print('Creating Constraint 4 - Maximum capacity of resources at hospitals')
+        for r in tqdm(self.model_sets['R']):
+            for h in self.model_sets['H']:
+                for t in self.model_sets['T']:
+                    self.model.addConstr(
+                        quicksum(self.vars['N'][p,h,t] for p in self.model_sets['S_r'][r]) == self.params['Demand'][p,a,t],
+                        name=f"C1_PatientAlocation_{r}_{h}_{t}"
+                    )
         breakpoint()
                     
 
