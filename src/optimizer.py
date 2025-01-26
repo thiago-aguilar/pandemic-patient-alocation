@@ -262,10 +262,6 @@ class PandemicAlocationOptimizer:
                     if t==1:
                         continue
                     
-                    if (t == 'TP7') and (h == 'H8'):
-                        breakpoint()
-                    else:
-                        continue
                     LHS = self.vars['N'][p,h,t]
                     RHS = self.vars['N'][p,h,t-1] \
                         + quicksum(self.vars['X'][p,a,h,t] for a in self.model_sets['A']) \
