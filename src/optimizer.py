@@ -12,16 +12,14 @@ import shutil
 
 class PortfolioOptimizer:
 
-    def __init__(self, estoque_file, obras_file, custos_transporte_file):
+    def __init__(self, data_path):
         """
         Argrs:
             estoque_file (str): Arquivo de estoque
             obras_file (str): Arquivo de obras
             custo_transporte_file (str): Arquivo com custos de transporte
         """
-        self.estoque_file = estoque_file
-        self.obras_file = obras_file
-        self.custos_transporte_file = custos_transporte_file
+        self.data_path = data_path
         self.clear_solutions_directory()
 
         self.obj_1 = None
@@ -34,6 +32,7 @@ class PortfolioOptimizer:
         # Leitura de preparação de dados
         self.read_inputs()
         self.define_sets()
+
         self.define_parameters()
 
         # Criação do modelo
@@ -46,11 +45,20 @@ class PortfolioOptimizer:
 
     def read_inputs(self):
 
-        print('Lendo inputs')
-        self.estoque = carregar_estoque(self.estoque_file)
-        self.obras = carregar_obras(self.obras_file)
-        self.custos_transporte = carregar_custos_transporte(self.custos_transporte_file)
-    
+        self.tipo_paciente_estadia_df = pd.read_csv(self.data_path + 'tipo_paciente_estadia.csv')
+        self.tipo_paciente_recurso_df = pd.read_csv(self.data_path + 'paciente_vs_recurso.csv')
+        self.hospital_recurso_sypply_df = pd.read_csv(self.data_path + 'hospitais_vs_recursos_qtd.csv')
+        self.hospital_area_pop_dist_df = pd.read_csv(self.data_path + 'hospitais_vs_area_pop_dist.csv')
+        self.cond_init_df = pd.read_csv(self.data_path + 'cond_init.csv')
+        self.area_pop_qtd_pacientes_df = pd.read_csv(self.data_path + 'area_pop_qtd_pacientes.csv')
+
+
+    def get_set_from_inputs(self, set_sheets, column_name):
+        current_set = set()
+        for sheet in set_sheets:
+            df_input = getattr(self, sheet)
+            current_set = current_set.union(df_input[column_name])    
+        return current_set
 
     def define_sets(self):
         
@@ -58,91 +66,109 @@ class PortfolioOptimizer:
         # Inicializa conjuntos
         model_sets = dict()
 
-        # I - Conjunto de Obras
-        model_sets['I'] = self.obras["obra"].unique()
+        # H - Conjunto de hospitais
+        hospital_sheets = ['hospital_recurso_sypply_df', 'hospital_area_pop_dist_df', 'cond_init_df']
+        hospital_column_name = 'Hospital'
+        model_sets['H'] = self.get_set_from_inputs(hospital_sheets, hospital_column_name)
 
-        # J - Conjuntos de depósitos
-        model_sets['J'] = self.estoque["cod_dep"].unique()
-        
-        # M - Conjunto de materiais
-        model_sets['M'] = self.estoque["cod_mat"].unique()
+        # A - Áreas de população
+        population_sheets = ['area_pop_qtd_pacientes_df', 'hospital_area_pop_dist_df']
+        population_column_name = 'Area_pop'
+        model_sets['A'] = self.get_set_from_inputs(population_sheets, population_column_name)
 
-        # J_i - Subconjunto de depósitos que executam a obra i
-        model_sets['J_i'] = (
-            self.obras
-            .drop_duplicates(subset=['obra', 'cod_dep'])
-            .groupby('obra')
-            .agg({'cod_dep': 'unique'})
+        # T - Períodos (dias) no horizonte de planejamento
+        period_sheets = ['area_pop_qtd_pacientes_df', 'cond_init_df']
+        period_column_name = 'Dia'
+        model_sets['T'] = self.get_set_from_inputs(period_sheets, period_column_name)
+        self.checa_periodos_validos(model_sets['T'])
+
+        # R - Tipo de recursos
+        resourse_sheets = ['hospital_recurso_sypply_df', 'tipo_paciente_recurso_df']
+        resource_column_name = 'Recurso'
+        model_sets['R'] = self.get_set_from_inputs(resourse_sheets, resource_column_name)
+
+        # P - Tipos de pacientes
+        patient_type_sheets = ['area_pop_qtd_pacientes_df', 'cond_init_df', 'tipo_paciente_recurso_df', 'tipo_paciente_estadia_df']
+        patient_type_columns_name = 'Tipo_de_paciente'
+        model_sets['P'] = self.get_set_from_inputs(patient_type_sheets, patient_type_columns_name)
+
+        # Sr - Tipos de pacientes (os mesmos tipos do set P) que demandam o recurso r
+        filtro_recurso = self.tipo_paciente_recurso_df['Usa_recurso'] == 1
+        model_sets['S_r'] = (
+            self.tipo_paciente_recurso_df
+            [filtro_recurso]
+            .groupby('Recurso')
+            .agg({'Tipo_de_paciente': 'unique'})
             .to_dict()
-            ['cod_dep']
+            ['Tipo_de_paciente']
         )
-
-        # I[j] - Subconjunto de obras que o depósito j pode executar
-        model_sets['I_j'] = (
-            self.obras
-            .drop_duplicates(subset=['obra', 'cod_dep'])
-            .groupby('cod_dep')
-            .agg({'obra': 'unique'})
-            .to_dict()
-            ['obra']
-        )
-
-        # M[i] - Subconjunto de materiais que a obra i requer
-        model_sets['M_i'] = (
-            self.obras
-            .drop_duplicates(subset=['obra', 'cod_mat'])
-            .groupby('obra')
-            .agg({'cod_mat': 'unique'})
-            .to_dict()
-            ['cod_mat']
-        )
-
-        # possible_transfer - conjunto de tuplas (k,j,m) com todas as transferencias possiveis
-        model_sets['possible_transfer'] = set(self.custos_transporte.keys())
 
         self.model_sets = model_sets
 
+
+    @staticmethod
+    def checa_periodos_validos(periodos_set):
+        min_day = min(periodos_set)
+        max_day = max(periodos_set)
+        for day in range(min_day, max_day + 1):
+            if day not in (periodos_set):
+                raise Exception('O dia {day} deve ser informado nos inputs, pois está entre o dia minimo e maximo informado')
         
     def define_parameters(self):
         
         print('Criando parâmetros')
         # Inicializa parâmetros
         parameters = dict()
-
-        # w[i] - prioridade de uma dada obra i
-        parameters['w'] = (
-            self.obras
-            .drop_duplicates(subset=['obra', 'prioridade'])
-            .set_index('obra')
-            .to_dict()
-            ['prioridade']
-        )
-
-        # q[i,m] - quantidade do material m necessario na obra i
-        parameters['q'] = (
-            self.obras
-            .groupby(['obra', 'cod_mat'])
-            .agg({'qtd_dem': 'sum'})
-            .to_dict()
-            ['qtd_dem']
-        )
-
-        # Q[j,m] - estoque inicial do material m no deposito j
-        parameters['Q'] = (
-            self.estoque
-            .set_index(['cod_dep', 'cod_mat'])
-            .to_dict()
-            ['estoque']
-        )
         
-        # c[k,j,m] - custo de transporte de uma unidade do material m do deposito k para o deposito j
-        parameters['c'] = self.custos_transporte
+        # Distance[a,h]  - Distance from populational area a until hospital h. Unit: kilometers
+        parameters['Distance'] = (
+            self.hospital_area_pop_dist_df.
+            set_index(['Area_pop', 'Hospital'])
+            .to_dict()
+            ['Distancia']
+        )
 
-        # N - quantidade total de obras
-        parameters['N'] = self.obras['obra'].nunique()
+        # Demand[p,a,t] - Demand of patient type p, in populational era a, at the day t. Unit: # of patients
+        parameters['Demand'] = (
+            self.area_pop_qtd_pacientes_df
+            .set_index(['Tipo_de_paciente', 'Area_pop', 'Dia'])
+            .to_dict()['Qtd_pacientes']
+        )
 
-        # D - quantidade total de depositos
-        parameters['D'] = self.obras['cod_dep'].nunique()
+        # InitPatients[p,h] - Quantity of patient type p, at the hospital h, that entered before the begining of planing horizon. Unit: # of patients
+        parameters['InitPatients'] = (
+            self.cond_init_df
+            .groupby(['Tipo_de_paciente', 'Hospital'])
+            .agg({'Qtd_pacientes_liberados': 'sum'})
+            .to_dict()['Qtd_pacientes_liberados']
+        )
+
+        # ReleasedPatients[p,h,t]- Quantity of patient type p, at the hospital h, before the befining of planing horizon, that are released at day t. Unit: # of patients
+        parameters['ReleasedPatients'] = (
+            self.cond_init_df
+            .set_index(['Tipo_de_paciente', 'Hospital', 'Dia'])
+            .to_dict()
+            ['Qtd_pacientes_liberados']
+        )
+
+        # LenghOfStay[p] - Quantity of days that the patient type p stays at a hospital
+        parameters['LenghOfStay'] = (
+            self.tipo_paciente_estadia_df
+            .set_index(['Tipo_de_paciente'])
+            .to_dict()
+            ['Estadia']
+        )
+
+        # ResourceCapacity[r,h] - Amount of resource type r, available at the hospital h. Note that the amount is the same along all planing horizon. Unit: # of recources type r
+        parameters['ResourceCapacity'] = (
+            self.hospital_recurso_sypply_df
+            .set_index(['Recurso', 'Hospital'])
+            .to_dict()
+            ['Qtd_recurso']
+        )
+
+        # BigM - Big number to model binary variable Y. Set as the sum of all patient demand in the scenario. 
+        parameters['BigM'] = self.area_pop_qtd_pacientes_df['Qtd_pacientes'].sum()
 
         self.params = parameters
 
@@ -152,18 +178,49 @@ class PortfolioOptimizer:
         print('Criando variáveis de decisão')
         decision_variables = dict()
 
-        # x[i,j] - Binária: 1 se a obra i é executada no depósito j
-        decision_variables['x'] = self.model.addVars(
-            [(i, j) for i in self.model_sets['I'] for j in self.model_sets['J_i'][i]],
-            vtype=GRB.BINARY,
-            name="x"
+        # X[p,a,h,t] - Continuous : Number of patients type p, area a, that enters in the hospital h, at the day t. Unit: # of patients
+        decision_variables['X'] = self.model.addVars(
+            [
+                (p,a,h,t) 
+                for p in self.model_sets['P'] 
+                for a in self.model_sets['A'] 
+                for h in self.model_sets['H']
+                for t in self.model_sets['T']
+             ],
+            vtype=GRB.CONTINUOUS,
+            name="X",
+            lb=0
         )
 
-        # t[k,j,m]: Continua: Quantidade de material m transferida do depósito k para o depósito j
-        decision_variables['t'] = self.model.addVars(
-            [(k, j, m) for k in self.model_sets['J'] for j in self.model_sets['J'] for m in self.model_sets['M'] if (j != k) and ((k,j,m) in self.model_sets['possible_transfer']) ],
+        # N[p,h,t] - Continuous : Total number of patients type p, at the hospital h, day t. Unit: # of patients
+        decision_variables['N'] = self.model.addVars(
+            [
+                (p,h,t) 
+                for p in self.model_sets['P'] 
+                for h in self.model_sets['H']
+                for t in self.model_sets['T']
+             ],
             vtype=GRB.CONTINUOUS,
-            name="t",
+            name="N",
+            lb=0
+        )
+
+        # D - Continuous : Maximum distance that a patient has to travel to get to its hospital. 
+        decision_variables['D'] = self.model.addVar(
+            lb=0,
+            vtype=GRB.CONTINUOUS,
+            name='T'
+        )
+
+        # Y[a,h] - Binary : Represents if a patient from area a is assigned to hospital h along all planing horizont.
+        decision_variables['Y'] = self.model.addVars(
+            [
+                (a,h) 
+                for a in self.model_sets['A'] 
+                for h in self.model_sets['H']
+             ],
+            vtype=GRB.CONTINUOUS,
+            name="Y",
             lb=0
         )
     
@@ -172,34 +229,54 @@ class PortfolioOptimizer:
 
     def create_constraints(self):
 
-        # Restrição 1 - Obra executada no máximo uma vez
-        print('Criando restrição 1')
-        for i in tqdm(self.model_sets['I']):
-            self.model.addConstr(
-                quicksum(self.vars['x'][i,j] for j in self.model_sets['J_i'][i]) <= 1,
-                name=f"C1_OneExecution_{i}"
-            )
+        # Constraint 1 - All patients demand need to be allocated to hospitals
+        print('Creating constraint 1')
+        for p in tqdm(self.model_sets['P']):
+            for a in self.model_sets['A']:
+                for t in self.model_sets['T']:
+                    self.model.addConstr(
+                        quicksum(self.vars['X'][p,a,h,t] for h in self.model_sets['H']) == self.params['Demand'][p,a,t],
+                        name=f"C1_PatientAlocation_{p}_{a}_{t}"
+                    )
         
-        # Restrição 2 - Balanço de massa do estoque de materiais
+        # Constraint 2 - Patient flow at initial day
         print('Criando restrição 2')
-        for m in tqdm(self.model_sets['M']):
-            for j in self.model_sets['J']:  
-                
-                LHS = quicksum(self.vars['x'][i, j] * self.params['q'][i, m] for i in self.model_sets['I_j'][j] if m in self.model_sets['M_i'][i]) + \
-                      quicksum(self.vars['t'][j, k, m] for k in self.model_sets['J'] if (k!=j) and ((j,k,m) in self.model_sets['possible_transfer']))              
-                
+        for p in tqdm(self.model_sets['P']):
+            for h in self.model_sets['H']:               
+                LHS = self.vars['N'][p,h,1]
 
-                tuple_get = (j,m)
-                initial_stock = self.params['Q'].get(tuple_get, 0)
-        
-                RHS = initial_stock + \
-                       quicksum(self.vars['t'][k,j,m] for k in self.model_sets['J'] if (k!=j) and ((k,j,m) in self.model_sets['possible_transfer']) )
-
+                tuple_get_released_patients = (p,h,1)
+                RHS = self.params['InitPatients'][p,h] \
+                    + quicksum(self.vars['X'][p,a,h,1] for a in self.model_sets['A']) \
+                    + self.params['ReleasedPatients'].get(tuple_get_released_patients, 0)
+                
                 self.model.addConstr(
-                    # LHS
-                    LHS <= RHS,                    
-                    name=f"C2_StockBalance_{m}_{j}"
-                )
+                        LHS == RHS,
+                        name=f"C2_PatientFlowInitialDay_{p}_{h}"
+                    )
+                
+        # Constraint 3 - Patient flow for all other days
+        for p in tqdm(self.model_sets['P']):
+            for h in self.model_sets['H']:
+                for t in self.model_sets['T']:
+                    if t==1:
+                        continue
+                    
+                    if (t == 'TP7') and (h == 'H8'):
+                        breakpoint()
+                    else:
+                        continue
+                    LHS = self.vars['N'][p,h,t]
+                    RHS = self.vars['N'][p,h,t-1] \
+                        + quicksum(self.vars['X'][p,a,h,t] for a in self.model_sets['A']) \
+                        - (
+                            quicksum(self.vars['X'][p,a,h,t-self.params['LenghOfStay'][p]] for a in self.model_sets['A'] if ((t-self.params['LenghOfStay'][p]) >= 1)) \
+                            + self.params['ReleasedPatients'][p,h,t] 
+                        )
+                    
+        # Constraint 4 - Maximum capacity of resources at hospitals
+        breakpoint()
+                    
 
         
     def set_obj_function(self, weight_priority: float, weight_cost: float):
