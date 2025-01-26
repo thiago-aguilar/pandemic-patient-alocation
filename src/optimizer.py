@@ -387,105 +387,158 @@ class PortfolioOptimizer:
         df_grouped.to_csv(path_output + 'resultado_agrupado.csv', index=False)
 
 
-    def create_pareto_curve(self):
+    # def create_pareto_curve(self):
         
-        # Optimize only priorities
-        self.set_obj_function(weight_priority=1, weight_cost=0)
-        self.model.optimize()
+    #     # Optimize only priorities
+    #     self.set_obj_function(weight_priority=1, weight_cost=0)
+    #     self.model.optimize()
 
-        # Get maximum priority
-        P_max = abs(self.obj_1.getValue())
+    #     # Get maximum priority
+    #     P_max = abs(self.obj_1.getValue())
         
-        # add constraiont to garantee optimal priorities, and minimize cost
+    #     # add constraiont to garantee optimal priorities, and minimize cost
+    #     self.model.addConstr(
+    #             self.obj_1 <= - P_max*0.9999,
+    #             name=f"force_max_priority"
+    #         )
+    #     self.set_obj_function(weight_priority=0, weight_cost=1)
+    #     self.model.optimize()
+    #     self.generate_results()
+
+    #     # Get maximum cost
+    #     C_max = abs(self.obj_2.getValue())
+
+    #     # Remove created constraint to force max priority
+    #     constraint_added = self.model.getConstrByName('force_max_priority')
+    #     self.model.remove(constraint_added)
+
+    #     # Optimize priorities with cost equals 0
+    #     self.model.addConstr(
+    #             self.obj_2 == 0,
+    #             name=f"force_zero_cost"
+    #         )
+    #     self.set_obj_function(weight_priority=1, weight_cost=0)
+    #     self.model.optimize() 
+    #     self.generate_results()
+
+    #     # Store P_min (with zero of cost transfer)
+    #     P_min = abs(self.obj_1.getValue())
+    #     C_min = 0
+
+    #     # Remove created constraint to force_zero_cost
+    #     constraint_added = self.model.getConstrByName('force_zero_cost')
+    #     self.model.remove(constraint_added)
+
+    #     # Create weights array for pareto curve
+    #     begin_weight = 1e-6
+    #     sample_amount = 20
+    #     half_sample = int(sample_amount / 2)
+
+    #     weights_1 = np.logspace(np.log10(begin_weight), np.log10(1), sample_amount, endpoint=False)
+    #     weights_2 = 1 - np.logspace(np.log10(begin_weight), np.log10(1), sample_amount, endpoint=False)
+        
+    #     w3_samples = 10
+    #     weights_3 = np.linspace(0.125,0.875, w3_samples, endpoint=False)
+        
+    #     weights = np.concatenate([weights_1[half_sample:], weights_2[half_sample:], weights_3])
+
+    #     # Initialize pareto curves empty
+    #     dict_intitialize_curve = {
+    #         'priority': [],
+    #         'cost': [],
+    #     }
+    #     idx_array = []
+    #     pareto_original = copy.deepcopy(dict_intitialize_curve) 
+    #     pareto_normalized = copy.deepcopy(dict_intitialize_curve)
+
+    #     # Iterate over weights, optimize, and store pareto curve values
+    #     for idx, w_priority in enumerate(weights):
+    #         w_cost = 1 - w_priority
+
+    #         # Optimize 
+    #         self.set_obj_function(
+    #             weight_priority = w_priority/(P_max - P_min),
+    #             weight_cost = w_cost/(C_max - C_min)
+    #         )
+    #         self.model.optimize()
+    #         self.generate_results()
+
+    #         # Get results
+    #         priority_result = self.obj_1.getValue()
+    #         cost_result = self.obj_2.getValue()
+
+    #         # Store pareto curve value
+    #         pareto_original['priority'].append(priority_result)
+    #         pareto_original['cost'].append(cost_result)
+            
+    #         # Store index
+    #         idx_array.append(idx)
+    #         print(f'Optimized Iteration {idx}')
+
+    #     # Store last data point
+    #     pareto_original['priority'].append(- P_min)
+    #     pareto_original['cost'].append(C_min)
+
+    #     # # Store first data point
+    #     pareto_original['priority'].append(- P_max)
+    #     pareto_original['cost'].append(C_max)
+
+    #     idx_array.append(idx+1)
+    #     idx_array.append(idx+2)
+
+
+    #     pareto_original_df = pd.DataFrame(pareto_original, index=idx_array)
+    #     pareto_original_df.to_csv('results_pareto/pareto_curve.csv')
+
+def create_pareto_curve_epsilon(self):
+    # Optimize only for priority to find P_max
+    self.set_obj_function(weight_priority=1, weight_cost=0)
+    self.model.optimize()
+    P_max = abs(self.obj_1.getValue())
+
+    # Optimize only for cost to find C_max
+    self.set_obj_function(weight_priority=0, weight_cost=1)
+    self.model.optimize()
+    C_max = abs(self.obj_2.getValue())
+
+    # Initialize epsilon step size and results storage
+    epsilon_steps = 20
+    epsilon_priority = (P_max / epsilon_steps)
+    epsilon_cost = (C_max / epsilon_steps)
+
+    pareto_curve = {
+        'priority': [],
+        'cost': []
+    }
+
+    # Generate Pareto curve using epsilon constraints
+    for i in range(epsilon_steps):
+        # Set priority constraint (epsilon decreasing)
+        priority_limit = P_max - (i * epsilon_priority)
         self.model.addConstr(
-                self.obj_1 <= - P_max*0.9999,
-                name=f"force_max_priority"
-            )
+            self.obj_1 >= -priority_limit,
+            name=f"priority_constraint_{i}"
+        )
+
+        # Minimize cost under the given priority constraint
         self.set_obj_function(weight_priority=0, weight_cost=1)
         self.model.optimize()
         self.generate_results()
 
-        # Get maximum cost
-        C_max = abs(self.obj_2.getValue())
+        # Store the results
+        cost_result = abs(self.obj_2.getValue())
+        priority_result = abs(self.obj_1.getValue())
+        pareto_curve['priority'].append(priority_result)
+        pareto_curve['cost'].append(cost_result)
 
-        # Remove created constraint to force max priority
-        constraint_added = self.model.getConstrByName('force_max_priority')
+        print(f"Epsilon Iteration {i}: Priority={priority_result}, Cost={cost_result}")
+
+        # Remove the constraint for the next iteration
+        constraint_added = self.model.getConstrByName(f'priority_constraint_{i}')
         self.model.remove(constraint_added)
 
-        # Optimize priorities with cost equals 0
-        self.model.addConstr(
-                self.obj_2 == 0,
-                name=f"force_zero_cost"
-            )
-        self.set_obj_function(weight_priority=1, weight_cost=0)
-        self.model.optimize() 
-        self.generate_results()
+    # Save the Pareto curve to a file
+    pareto_df = pd.DataFrame(pareto_curve)
+    pareto_df.to_csv('results_pareto/pareto_curve_epsilon.csv', index=False)
 
-        # Store P_min (with zero of cost transfer)
-        P_min = abs(self.obj_1.getValue())
-        C_min = 0
-
-        # Remove created constraint to force_zero_cost
-        constraint_added = self.model.getConstrByName('force_zero_cost')
-        self.model.remove(constraint_added)
-
-        # Create weights array for pareto curve
-        begin_weight = 1e-6
-        sample_amount = 20
-        half_sample = int(sample_amount / 2)
-
-        weights_1 = np.logspace(np.log10(begin_weight), np.log10(1), sample_amount, endpoint=False)
-        weights_2 = 1 - np.logspace(np.log10(begin_weight), np.log10(1), sample_amount, endpoint=False)
-        
-        w3_samples = 10
-        weights_3 = np.linspace(0.125,0.875, w3_samples, endpoint=False)
-        
-        weights = np.concatenate([weights_1[half_sample:], weights_2[half_sample:], weights_3])
-
-        # Initialize pareto curves empty
-        dict_intitialize_curve = {
-            'priority': [],
-            'cost': [],
-        }
-        idx_array = []
-        pareto_original = copy.deepcopy(dict_intitialize_curve) 
-        pareto_normalized = copy.deepcopy(dict_intitialize_curve)
-
-        # Iterate over weights, optimize, and store pareto curve values
-        for idx, w_priority in enumerate(weights):
-            w_cost = 1 - w_priority
-
-            # Optimize 
-            self.set_obj_function(
-                weight_priority = w_priority/(P_max - P_min),
-                weight_cost = w_cost/(C_max - C_min)
-            )
-            self.model.optimize()
-            self.generate_results()
-
-            # Get results
-            priority_result = self.obj_1.getValue()
-            cost_result = self.obj_2.getValue()
-
-            # Store pareto curve value
-            pareto_original['priority'].append(priority_result)
-            pareto_original['cost'].append(cost_result)
-            
-            # Store index
-            idx_array.append(idx)
-            print(f'Optimized Iteration {idx}')
-
-        # Store last data point
-        pareto_original['priority'].append(- P_min)
-        pareto_original['cost'].append(C_min)
-
-        # # Store first data point
-        pareto_original['priority'].append(- P_max)
-        pareto_original['cost'].append(C_max)
-
-        idx_array.append(idx+1)
-        idx_array.append(idx+2)
-
-
-        pareto_original_df = pd.DataFrame(pareto_original, index=idx_array)
-        pareto_original_df.to_csv('results_pareto/pareto_curve.csv')
+    print("Pareto curve generated using epsilon constraints.")
