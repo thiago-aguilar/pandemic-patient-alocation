@@ -263,11 +263,13 @@ class PandemicAlocationOptimizer:
                         continue
                     
                     LHS = self.vars['N'][p,h,t]
+
+                    release_patients_tuple = (p,h,t)
                     RHS = self.vars['N'][p,h,t-1] \
                         + quicksum(self.vars['X'][p,a,h,t] for a in self.model_sets['A']) \
                         - (
                             quicksum(self.vars['X'][p,a,h,t-self.params['LenghOfStay'][p]] for a in self.model_sets['A'] if ((t-self.params['LenghOfStay'][p]) >= 1)) \
-                            + self.params['ReleasedPatients'][p,h,t] 
+                            + self.params['ReleasedPatients'].get(release_patients_tuple, 0)
                         )
                     
         # Constraint 4 - Maximum capacity of resources at hospitals
