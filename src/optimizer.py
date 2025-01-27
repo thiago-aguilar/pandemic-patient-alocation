@@ -359,6 +359,7 @@ class PandemicAlocationOptimizer:
 
         obj1_value = self.obj_1.getValue()
         obj2_value = self.obj_2.getValue()
+
         sol_df = pd.DataFrame({
             'Fobj': ['Obj1', 'Obj2'],
             'Result': [obj1_value, obj2_value]
@@ -377,51 +378,53 @@ class PandemicAlocationOptimizer:
         else:
             os.mkdir(path_output)
         sol_df.to_csv(path_output + 'solution.csv', index=False)
-        
+
         # Get var X result and create a DF with it
-        vars_x_on = [key for key, elem in self.vars['x'].items() if np.isclose(elem.X, 1) ]
-        array_i = [elem[0] for elem in vars_x_on]
-        array_j = [elem[1] for elem in vars_x_on]
+        vars_x = [key for key, elem in self.vars['X'].items() if not np.isclose(elem.X, 0) ]
+        results_x = [elem.X for _, elem in self.vars['X'].items() if not np.isclose(elem.X, 0) ]
+        array_p = [elem[0] for elem in vars_x]
+        array_a = [elem[1] for elem in vars_x]
+        array_h = [elem[2] for elem in vars_x]
+        array_t = [elem[3] for elem in vars_x]
+
         df_output_X = pd.DataFrame({
-            'obra': array_i,
-            'cod_dep': array_j
-        })
-        df_output_X['obra_atendida'] = 1
-        df_output_X.to_csv(path_output + 'obras_atendidas.csv', index=False)
+            'Tipo_de_paciente': array_p,
+            'Area_pop': array_a,
+            'Hospital': array_h,
+            'Dia': array_t,
+            'Valor_Var': results_x
+        }).sort_values(by=['Dia', 'Tipo_de_paciente', 'Hospital', 'Area_pop'])[['Dia', 'Tipo_de_paciente', 'Hospital', 'Area_pop', 'Valor_Var']]
+        df_output_X.to_csv(path_output+ 'X_var.csv')
+        
+        # Get var N result and create a DF with it
+        vars_n = [key for key, elem in self.vars['N'].items() if not np.isclose(elem.X, 0) ]
+        results_n = [elem.X for _, elem in self.vars['N'].items() if not np.isclose(elem.X, 0) ]
+        array_p = [elem[0] for elem in vars_n]
+        array_h = [elem[1] for elem in vars_n]
+        array_t = [elem[2] for elem in vars_n]
 
-        # Generate DF grouped to compare with professor's solution
-        df_real_output = (
-            self.obras[['obra', 'cod_dep', 'prioridade']]
-            .drop_duplicates()
-            .merge(df_output_X, on=['cod_dep', 'obra'], how='left', validate='1:1')
-        )
-        df_real_output['obra_atendida'] = df_real_output['obra_atendida'].fillna(0)
-        df_real_output['prioridade_atendida'] = df_real_output['obra_atendida'] * df_real_output['prioridade']
+        df_output_N = pd.DataFrame({
+            'Tipo_de_paciente': array_p,
+            'Hospital': array_h,
+            'Dia': array_t,
+            'Valor_Var': results_n
+        }).sort_values(by=['Dia', 'Tipo_de_paciente', 'Hospital'])[['Dia', 'Tipo_de_paciente', 'Hospital', 'Valor_Var']]
+        df_output_N.to_csv(path_output+ 'N_var.csv')
 
-        df_grouped = (
-            df_real_output
-            .groupby(['cod_dep'])
-            .agg({
-                # NUM_OBRAS_ASSOCIADAS
-                'obra': 'nunique', 
-                # OBRAS_EXECUTADAS
-                'obra_atendida': 'sum',
-                # SOMA_PRIORIDADES_EXECUTADAS
-                'prioridade_atendida': 'sum',
-                # SOMA_PRIORIDADES_ASSOCIADAS
-                'prioridade': 'sum'
-            })
-            .reset_index()
-            .rename(
-                columns={
-                    'obra':'NUM_OBRAS_ASSOCIADAS',
-                    'obra_atendida': 'OBRAS_EXECUTADAS',
-                    'prioridade_atendida': 'SOMA_PRIORIDADES_EXECUTADAS',
-                    'prioridade': 'SOMA_PRIORIDADES_ASSOCIADAS'
-                }
-            )
-        )
-        df_grouped.to_csv(path_output + 'resultado_agrupado.csv', index=False)
+        # Get var Y result and create a DF with it
+        vars_y = [key for key, elem in self.vars['Y'].items() if not np.isclose(elem.X, 0) ]
+        results_y = [elem.X for _, elem in self.vars['Y'].items() if not np.isclose(elem.X, 0) ]
+        array_a = [elem[0] for elem in vars_y]
+        array_h = [elem[1] for elem in vars_y]
+
+        df_output_Y = pd.DataFrame({
+            'Area_pop': array_a,
+            'Hospital': array_h,
+            'Valor_Var': results_y
+        }).sort_values(by=['Area_pop', 'Hospital'])[['Area_pop', 'Hospital', 'Valor_Var']]
+        df_output_Y.to_csv(path_output+ 'Y_var.csv')
+        
+
 
 
     def create_pareto_curve_eps_restricted(self):
@@ -439,6 +442,9 @@ class PandemicAlocationOptimizer:
             )
         self.set_obj_function(weight_obj_1=0, weight_obj_2=1)
         self.model.optimize()
+
+        self.generate_results()
+
         # Get maximum cost
         obj2_max = self.obj_2.getValue()
 
@@ -459,6 +465,7 @@ class PandemicAlocationOptimizer:
         self.set_obj_function(weight_obj_1=1, weight_obj_2=0)
         self.model.optimize() 
 
+        self.generate_results()
         obj1_max = self.obj_1.getValue()
         
         extreme_point_1 = (obj1_min, obj2_max)
@@ -492,6 +499,7 @@ class PandemicAlocationOptimizer:
             name=f"eps_force_obj1"
             )
             self.model.optimize()
+            self.generate_results()
 
             obj1_result = self.obj_1.getValue()
             obj2_result = self.obj_2.getValue()
@@ -568,6 +576,8 @@ class PandemicAlocationOptimizer:
             )
         self.set_obj_function(weight_obj_1=0, weight_obj_2=1)
         self.model.optimize()
+        self.generate_results()
+
         # Get maximum cost
         obj2_max = self.obj_2.getValue()
 
