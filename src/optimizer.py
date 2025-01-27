@@ -39,7 +39,8 @@ class PandemicAlocationOptimizer:
         self.create_constraints()
 
         # Cria curva pareto        
-        self.create_pareto_curve_weighted_sum()
+        # self.create_pareto_curve_weighted_sum()
+        self.create_pareto_curve_eps_restricted()
 
 
     def read_inputs(self):
@@ -423,15 +424,15 @@ class PandemicAlocationOptimizer:
         df_grouped.to_csv(path_output + 'resultado_agrupado.csv', index=False)
 
 
-    def create_pareto_curve_weighted_sum(self):
-        
-        # Optimize only priorities
+    def create_pareto_curve_eps_restricted(self):
+
+        # Optimize obj 1
         self.set_obj_function(weight_obj_1=1, weight_obj_2=0)
         self.model.optimize()
 
         obj1_min = self.obj_1.getValue()
 
-        # add constraint to garantee optimal distance, and minimize maximum dist
+        # add constraint to garantee optimal obj1 and optimize obj2
         self.model.addConstr(
                 self.obj_1 <= obj1_min * 1.00001,
                 name=f"force_best_obj1"
@@ -441,16 +442,16 @@ class PandemicAlocationOptimizer:
         # Get maximum cost
         obj2_max = self.obj_2.getValue()
 
-        # Remove created constraint to force max priority
+        # Remove created constraint to force max obj1
         constraint_added = self.model.getConstrByName('force_best_obj1')
         self.model.remove(constraint_added)
 
-        # Optimize only maximum distance 
+        # Optimize obj2 
         self.set_obj_function(weight_obj_1=0, weight_obj_2=1)
         self.model.optimize()
         obj2_min = self.obj_2.getValue()
 
-        # Optimize priorities with cost equals 0
+        # add constraint to garantee optimal obj2 and optimize obj1
         self.model.addConstr(
                 self.obj_2 <= obj2_min * 1.00001,
                 name=f"force_best_obj2"
@@ -467,7 +468,136 @@ class PandemicAlocationOptimizer:
         delta_obj2 = obj2_max - obj2_min
 
 
-        # Remove created constraint to force_zero_cost
+        # Remove created constraint to force max obj2
+        constraint_added = self.model.getConstrByName('force_best_obj2')
+        self.model.remove(constraint_added)
+
+        sample_amount = 20
+        eps_values_obj1 = np.linspace(obj1_max, obj1_min, sample_amount)
+        eps_values_obj2 = np.linspace(obj2_max, obj2_min, sample_amount)
+
+        pareto_curve = {
+            'obj1': [],
+            'obj2': [],
+        }
+        idx_array = []
+        idx_array_counter = 0
+
+        # Varying obj1 eps, optimizing obj2
+        self.set_obj_function(weight_obj_1=0, weight_obj_2=1)
+        for idx, esp_obj1 in enumerate(eps_values_obj1):
+            # add eps constraint
+            self.model.addConstr(
+            self.obj_1 <= esp_obj1 * 1.00001,
+            name=f"eps_force_obj1"
+            )
+            self.model.optimize()
+
+            obj1_result = self.obj_1.getValue()
+            obj2_result = self.obj_2.getValue()
+
+            # Store pareto curve value
+            pareto_curve['obj1'].append(obj1_result)
+            pareto_curve['obj2'].append(obj2_result)
+            idx_array.append(idx_array_counter)
+            idx_array_counter += 1
+
+            # Remove created constraint
+            created_constraint = self.model.getConstrByName('eps_force_obj1')
+            self.model.remove(created_constraint)
+
+        # Varying obj2 eps, optimizing obj1
+        self.set_obj_function(weight_obj_1=1, weight_obj_2=0)
+        for idx, esp_obj2 in enumerate(eps_values_obj2):
+            # add eps constraint
+            self.model.addConstr(
+            self.obj_2 <= esp_obj2 * 1.00001,
+            name=f"eps_force_obj2"
+            )
+            self.model.optimize()
+
+            obj1_result = self.obj_1.getValue()
+            obj2_result = self.obj_2.getValue()
+
+            # Store pareto curve value
+            pareto_curve['obj1'].append(obj1_result)
+            pareto_curve['obj2'].append(obj2_result)
+            idx_array.append(idx_array_counter)
+            idx_array_counter += 1
+
+            # Remove created constraint
+            created_constraint = self.model.getConstrByName('eps_force_obj2')
+            self.model.remove(created_constraint)
+
+
+        # Store last data point
+        pareto_curve['obj1'].append(obj1_min)
+        pareto_curve['obj2'].append(obj2_max)
+        idx_array.append(idx_array_counter)
+        idx_array_counter += 1
+
+        # # Store first data point
+        pareto_curve['obj1'].append(obj1_max)
+        pareto_curve['obj2'].append(obj2_min)
+        idx_array.append(idx_array_counter)
+        idx_array_counter += 1
+
+        # Store result
+        pareto_df = pd.DataFrame(pareto_curve, index=idx_array)
+        pareto_df.to_csv('results_pareto/pareto_curve.csv')
+        breakpoint()
+
+
+
+
+
+
+
+    def create_pareto_curve_weighted_sum(self):
+        
+        # Optimize obj 1
+        self.set_obj_function(weight_obj_1=1, weight_obj_2=0)
+        self.model.optimize()
+
+        obj1_min = self.obj_1.getValue()
+
+        # add constraint to garantee optimal obj1 and optimize obj2
+        self.model.addConstr(
+                self.obj_1 <= obj1_min * 1.00001,
+                name=f"force_best_obj1"
+            )
+        self.set_obj_function(weight_obj_1=0, weight_obj_2=1)
+        self.model.optimize()
+        # Get maximum cost
+        obj2_max = self.obj_2.getValue()
+
+        # Remove created constraint to force max obj1
+        constraint_added = self.model.getConstrByName('force_best_obj1')
+        self.model.remove(constraint_added)
+
+        # Optimize obj2 
+        self.set_obj_function(weight_obj_1=0, weight_obj_2=1)
+        self.model.optimize()
+        obj2_min = self.obj_2.getValue()
+
+        # add constraint to garantee optimal obj2 and optimize obj1
+        self.model.addConstr(
+                self.obj_2 <= obj2_min * 1.00001,
+                name=f"force_best_obj2"
+            )
+        self.set_obj_function(weight_obj_1=1, weight_obj_2=0)
+        self.model.optimize() 
+
+        obj1_max = self.obj_1.getValue()
+        
+        extreme_point_1 = (obj1_min, obj2_max)
+        extreme_point_2 = (obj1_max, obj2_min)
+        extreme_points = [extreme_point_1, extreme_point_2]
+        delta_obj1 = obj1_max - obj1_min
+        delta_obj2 = obj2_max - obj2_min
+
+
+        # Remove created constraint to force max obj2
         constraint_added = self.model.getConstrByName('force_best_obj2')
         self.model.remove(constraint_added)
 
@@ -476,13 +606,13 @@ class PandemicAlocationOptimizer:
         sample_amount = 20
         half_sample = int(sample_amount / 2)
 
-        weights_1 = np.logspace(np.log10(begin_weight), np.log10(1), sample_amount, endpoint=False)
-        weights_2 = 1 - np.logspace(np.log10(begin_weight), np.log10(1), sample_amount, endpoint=False)
+        weights_1 = np.logspace(np.log10(begin_weight), np.log10(1.3), sample_amount, endpoint=False)
+        weights_2 = 1 - np.logspace(np.log10(begin_weight), np.log10(1.3), sample_amount, endpoint=False)
         
         w3_samples = 10
-        weights_3 = np.linspace(0.125,0.875, w3_samples, endpoint=False)
+        # weights_3 = np.linspace(0.125,0.875, w3_samples, endpoint=False)
         
-        weights = np.concatenate([weights_1[half_sample:], weights_2[half_sample:], weights_3])
+        weights = np.concatenate([weights_1, weights_2])
 
         # Initialize pareto curves empty
         dict_intitialize_curve = {
