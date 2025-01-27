@@ -45,7 +45,7 @@ def print_pareto(df_pareto, title, utopico_point, antiutopico_point, decision=No
 
 def generate_pareto(pareto_df, title='', decision=None):
     # Calculate antiutopic and utopic points
-    pareto_df = pareto_df[['obj1', 'obj2']].drop_duplicates().sort_values(by='obj2')
+    pareto_df = pareto_df[['obj1', 'obj2']].drop_duplicates().sort_values(by='obj1')
     antiutopico_priority = max(pareto_df['obj1']) + (max(pareto_df['obj1']) - min(pareto_df['obj1'])) * 0.1 
     antiutopico_cost = max(pareto_df['obj2']) + (max(pareto_df['obj2']) - min(pareto_df['obj2'])) * 0.1 
     utopic_cost = min(pareto_df['obj2'])
