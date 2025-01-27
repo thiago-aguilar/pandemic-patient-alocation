@@ -1,7 +1,6 @@
 import pandas as pd
 import json
 from abc import abstractmethod
-from src.load_data import carregar_estoque, carregar_custos_transporte, carregar_obras
 import numpy as np
 
 from gurobipy import Model, GRB, quicksum
@@ -10,7 +9,7 @@ import copy
 import os
 import shutil
 
-class PortfolioOptimizer:
+class PandemicAlocationOptimizer:
 
     def __init__(self, data_path):
         """
@@ -40,7 +39,7 @@ class PortfolioOptimizer:
         self.create_constraints()
 
         # Cria curva pareto        
-        self.create_pareto_curve()
+        self.create_pareto_curve_weighted_sum()
 
 
     def read_inputs(self):
@@ -92,7 +91,7 @@ class PortfolioOptimizer:
         patient_type_columns_name = 'Tipo_de_paciente'
         model_sets['P'] = self.get_set_from_inputs(patient_type_sheets, patient_type_columns_name)
 
-        # Sr - Tipos de pacientes (os mesmos tipos do set P) que demandam o recurso r
+        # S_r[r] - Tipos de pacientes (os mesmos tipos do set P) que demandam o recurso r
         filtro_recurso = self.tipo_paciente_recurso_df['Usa_recurso'] == 1
         model_sets['S_r'] = (
             self.tipo_paciente_recurso_df
@@ -158,8 +157,11 @@ class PortfolioOptimizer:
             .to_dict()
             ['Estadia']
         )
+        # self.area_pop_qtd_pacientes_df.groupby('Dia').agg({'Qtd_pacientes': 'sum'})
+        #  self.area_pop_qtd_pacientes_df
 
         # ResourceCapacity[r,h] - Amount of resource type r, available at the hospital h. Note that the amount is the same along all planing horizon. Unit: # of recources type r
+        self.hospital_recurso_sypply_df['Qtd_recurso'] *= 30
         parameters['ResourceCapacity'] = (
             self.hospital_recurso_sypply_df
             .set_index(['Recurso', 'Hospital'])
@@ -230,17 +232,18 @@ class PortfolioOptimizer:
     def create_constraints(self):
 
         # Constraint 1 - All patients demand need to be allocated to hospitals
-        print('Creating constraint 1')
+        print('Creating constraint 1 - Patients Demand')
         for p in tqdm(self.model_sets['P']):
             for a in self.model_sets['A']:
                 for t in self.model_sets['T']:
+                    demand_tuple = (p,a,t)
                     self.model.addConstr(
-                        quicksum(self.vars['X'][p,a,h,t] for h in self.model_sets['H']) == self.params['Demand'][p,a,t],
+                        quicksum(self.vars['X'][p,a,h,t] for h in self.model_sets['H']) == self.params['Demand'].get(demand_tuple,0),
                         name=f"C1_PatientAlocation_{p}_{a}_{t}"
                     )
         
         # Constraint 2 - Patient flow at initial day
-        print('Criando restrição 2')
+        print('Creating Constraint 2 - Patient flow at initial day')
         for p in tqdm(self.model_sets['P']):
             for h in self.model_sets['H']:               
                 LHS = self.vars['N'][p,h,1]
@@ -248,7 +251,7 @@ class PortfolioOptimizer:
                 tuple_get_released_patients = (p,h,1)
                 RHS = self.params['InitPatients'][p,h] \
                     + quicksum(self.vars['X'][p,a,h,1] for a in self.model_sets['A']) \
-                    + self.params['ReleasedPatients'].get(tuple_get_released_patients, 0)
+                    - self.params['ReleasedPatients'].get(tuple_get_released_patients, 0)
                 
                 self.model.addConstr(
                         LHS == RHS,
@@ -256,46 +259,79 @@ class PortfolioOptimizer:
                     )
                 
         # Constraint 3 - Patient flow for all other days
+        print('Creating Constraint 3 - Patient flow for all other days')
         for p in tqdm(self.model_sets['P']):
             for h in self.model_sets['H']:
                 for t in self.model_sets['T']:
                     if t==1:
                         continue
                     
-                    if (t == 'TP7') and (h == 'H8'):
-                        breakpoint()
-                    else:
-                        continue
                     LHS = self.vars['N'][p,h,t]
+
+                    release_patients_tuple = (p,h,t)
                     RHS = self.vars['N'][p,h,t-1] \
                         + quicksum(self.vars['X'][p,a,h,t] for a in self.model_sets['A']) \
                         - (
                             quicksum(self.vars['X'][p,a,h,t-self.params['LenghOfStay'][p]] for a in self.model_sets['A'] if ((t-self.params['LenghOfStay'][p]) >= 1)) \
-                            + self.params['ReleasedPatients'][p,h,t] 
+                            + self.params['ReleasedPatients'].get(release_patients_tuple, 0)
                         )
+                    self.model.addConstr(
+                        LHS == RHS,
+                        name=f"C3_PatientFlowOtherDays_{p}_{h}_{t}"
+                    )
+
                     
         # Constraint 4 - Maximum capacity of resources at hospitals
+        print('Creating Constraint 4 - Maximum capacity of resources at hospitals')
+        for r in tqdm(self.model_sets['R']):
+            for h in self.model_sets['H']:
+                for t in self.model_sets['T']:
+                    self.model.addConstr(
+                        quicksum(self.vars['N'][p,h,t] for p in self.model_sets['S_r'][r]) <= self.params['ResourceCapacity'][r,h],
+                        name=f"C4_ResourceMaxCapacity_{r}_{h}_{t}"
+                    )
 
-        breakpoint()
+        # Constraint 5 - Function to activate Y binary variable for a given (a,h) if any patient from a is attended at hospital h
+        for a in self.model_sets['A']:
+            for h in self.model_sets['H']:
+                self.model.addConstr(
+                        quicksum(self.vars['X'][p,a,h,t] for p in self.model_sets['P'] for t in self.model_sets['T']) <= self.params['BigM'] *  self.vars['Y'][a,h],
+                        name=f"C5_Y_binary_activation_{a}_{h}"
+                    )
+                
+        # Constraint 6 - Calculus of maximum distance
+        for a in self.model_sets['A']:
+            for h in self.model_sets['H']:
+                self.model.addConstr(
+                        self.params['Distance'][a,h] * self.vars['Y'][a,h] <= self.vars['D'],
+                        name=f"C6_Maximum_distance_{a}_{h}"
+                    )
+                
                     
 
         
-    def set_obj_function(self, weight_priority: float, weight_cost: float):
+    def set_obj_function(self, weight_obj_1: float, weight_obj_2: float):
         
         if self.obj_1 is None:
-            # obj1 - Maximização de prioridades | Minimização de: - sum(prioridade)
-            self.obj_1 = - quicksum(self.vars['x'][i,j] * self.params['w'][i] for i in self.model_sets['I'] for j in self.model_sets['J_i'][i])
+            # Obj1 - Minimizing total distance of all patients 
+            self.obj_1 = quicksum(
+                self.vars['X'][p,a,h,t] * self.params['Distance'][a,h] 
+                for p in self.model_sets['P'] 
+                for a in self.model_sets['A'] 
+                for h in self.model_sets['H'] 
+                for t in self.model_sets['T']
+            )
 
         if self.obj_2 is None:
-            # obj2 - Minimização de custo
-            self.obj_2 = quicksum(self.vars['t'][k, j, m] * self.params['c'][k, j, m] for k in self.model_sets['J'] for j in self.model_sets['J'] for m in self.model_sets['M'] if (j!= k) and ((k,j,m) in self.model_sets['possible_transfer']))
+            # obj2 - Minimizing maximum distance
+            self.obj_2 = quicksum([self.vars['D']])
 
 
         self.model.setObjective(
             # Obj1 - Maximização de prioridades
-            weight_priority * self.obj_1 +
+            weight_obj_1 * self.obj_1 +
             # Obj2 - Maximização de pesos
-            weight_cost * self.obj_2,
+            weight_obj_2 * self.obj_2,
             GRB.MINIMIZE
         )
 
@@ -542,3 +578,110 @@ def create_pareto_curve_epsilon(self):
     pareto_df.to_csv('results_pareto/pareto_curve_epsilon.csv', index=False)
 
     print("Pareto curve generated using epsilon constraints.")
+    def create_pareto_curve_weighted_sum(self):
+        
+        # Optimize only priorities
+        self.set_obj_function(weight_obj_1=1, weight_obj_2=0)
+        self.model.optimize()
+
+        obj1_min = self.obj_1.getValue()
+
+        # add constraint to garantee optimal distance, and minimize maximum dist
+        self.model.addConstr(
+                self.obj_1 <= obj1_min * 1.00001,
+                name=f"force_best_obj1"
+            )
+        self.set_obj_function(weight_obj_1=0, weight_obj_2=1)
+        self.model.optimize()
+        # Get maximum cost
+        obj2_max = self.obj_2.getValue()
+
+        # Remove created constraint to force max priority
+        constraint_added = self.model.getConstrByName('force_best_obj1')
+        self.model.remove(constraint_added)
+
+        # Optimize only maximum distance 
+        self.set_obj_function(weight_obj_1=0, weight_obj_2=1)
+        self.model.optimize()
+        obj2_min = self.obj_2.getValue()
+
+        # Optimize priorities with cost equals 0
+        self.model.addConstr(
+                self.obj_2 <= obj2_min * 1.00001,
+                name=f"force_best_obj2"
+            )
+        self.set_obj_function(weight_obj_1=1, weight_obj_2=0)
+        self.model.optimize() 
+
+        obj1_max = self.obj_1.getValue()
+        
+        extreme_point_1 = (obj1_min, obj2_max)
+        extreme_point_2 = (obj1_max, obj2_min)
+        extreme_points = [extreme_point_1, extreme_point_2]
+        delta_obj1 = obj1_max - obj1_min
+        delta_obj2 = obj2_max - obj2_min
+
+
+        # Remove created constraint to force_zero_cost
+        constraint_added = self.model.getConstrByName('force_best_obj2')
+        self.model.remove(constraint_added)
+
+        # Create weights array for pareto curve
+        begin_weight = 1e-6
+        sample_amount = 20
+        half_sample = int(sample_amount / 2)
+
+        weights_1 = np.logspace(np.log10(begin_weight), np.log10(1), sample_amount, endpoint=False)
+        weights_2 = 1 - np.logspace(np.log10(begin_weight), np.log10(1), sample_amount, endpoint=False)
+        
+        w3_samples = 10
+        weights_3 = np.linspace(0.125,0.875, w3_samples, endpoint=False)
+        
+        weights = np.concatenate([weights_1[half_sample:], weights_2[half_sample:], weights_3])
+
+        # Initialize pareto curves empty
+        dict_intitialize_curve = {
+            'obj1': [],
+            'obj2': [],
+        }
+        idx_array = []
+        pareto_original = copy.deepcopy(dict_intitialize_curve) 
+
+        # Iterate over weights, optimize, and store pareto curve values
+        for idx, w_obj1 in enumerate(weights):
+            w_obj2 = 1 - w_obj1
+
+            # Optimize 
+            self.set_obj_function(
+                weight_obj_1 = w_obj1/(obj1_max),
+                weight_obj_2 = w_obj2/(obj2_max)
+            )
+            self.model.optimize()
+            # self.generate_results()
+
+            # Get results
+            priority_result = self.obj_1.getValue()
+            cost_result = self.obj_2.getValue()
+
+            # Store pareto curve value
+            pareto_original['obj1'].append(priority_result)
+            pareto_original['obj2'].append(cost_result)
+            
+            # Store index
+            idx_array.append(idx)
+            print(f'Optimized Iteration {idx}')
+
+        # Store last data point
+        pareto_original['obj1'].append(obj1_min)
+        pareto_original['obj2'].append(obj2_max)
+
+        # # Store first data point
+        pareto_original['obj1'].append(obj1_max)
+        pareto_original['obj2'].append(obj2_min)
+
+        idx_array.append(idx+1)
+        idx_array.append(idx+2)
+
+        pareto_original_df = pd.DataFrame(pareto_original, index=idx_array)
+        pareto_original_df.to_csv('results_pareto/pareto_curve.csv')
+        breakpoint()
