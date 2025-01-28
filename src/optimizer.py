@@ -523,6 +523,7 @@ class PandemicAlocationOptimizer:
             name=f"eps_force_obj2"
             )
             self.model.optimize()
+            self.generate_results()
 
             obj1_result = self.obj_1.getValue()
             obj2_result = self.obj_2.getValue()

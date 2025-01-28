@@ -4,6 +4,27 @@ import os
 import numpy as np
 from pymoo.vendor.hv import HyperVolume
 
+
+def filtra_fronteira_pareto_func(df_pareto):
+    pontos_fronteira = []
+
+    # Função para verificar se um ponto domina outro
+    def domina(ponto1, ponto2):
+        return all(p1 <= p2 for p1, p2 in zip(ponto1, ponto2)) and any(p1 < p2 for p1, p2 in zip(ponto1, ponto2))
+
+
+    for i, ponto1 in df_pareto.iterrows():
+        dominado = False
+        for j, ponto2 in df_pareto.iterrows():
+            if i != j and domina(ponto2[['obj1', 'obj2']], ponto1[['obj1', 'obj2']]):
+                dominado = True
+                break
+        if not dominado:
+            pontos_fronteira.append(ponto1)
+
+    df_fronteira = pd.DataFrame(pontos_fronteira)
+    return df_fronteira
+
 def print_pareto(df_pareto, title, utopico_point, antiutopico_point, decision=None):
     """
     Função para plotar a fronteira Pareto com pontos utópico, anti-utópico e a decisão destacada.
@@ -43,9 +64,12 @@ def print_pareto(df_pareto, title, utopico_point, antiutopico_point, decision=No
 
 
 
-def generate_pareto(pareto_df, title='', decision=None):
+def generate_pareto(pareto_df, title='', decision=None, filtra_pareto=False):
     # Calculate antiutopic and utopic points
     pareto_df = pareto_df[['obj1', 'obj2']].drop_duplicates().sort_values(by='obj1')
+    if filtra_pareto:
+        pareto_df = filtra_fronteira_pareto_func(pareto_df)
+
     antiutopico_priority = max(pareto_df['obj1']) + (max(pareto_df['obj1']) - min(pareto_df['obj1'])) * 0.1 
     antiutopico_cost = max(pareto_df['obj2']) + (max(pareto_df['obj2']) - min(pareto_df['obj2'])) * 0.1 
     utopic_cost = min(pareto_df['obj2'])
