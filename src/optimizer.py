@@ -423,7 +423,13 @@ class PandemicAlocationOptimizer:
             'Valor_Var': results_y
         }).sort_values(by=['Area_pop', 'Hospital'])[['Area_pop', 'Hospital', 'Valor_Var']]
         df_output_Y.to_csv(path_output+ 'Y_var.csv')
-        
+
+        sets_list = ['H', 'A', 'T', 'R', 'P']
+        sets_df = dict()
+        for elem in sets_list:
+            sets_df[elem] = [len(self.model_sets[elem])]
+        df_sets = pd.DataFrame(sets_df)
+        df_sets.to_csv(path_output +  'problem_sets.csv')
 
 
 

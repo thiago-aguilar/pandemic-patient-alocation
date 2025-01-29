@@ -70,8 +70,8 @@ def generate_pareto(pareto_df, title='', decision=None, filtra_pareto=False):
     if filtra_pareto:
         pareto_df = filtra_fronteira_pareto_func(pareto_df)
 
-    antiutopico_priority = max(pareto_df['obj1']) + (max(pareto_df['obj1']) - min(pareto_df['obj1'])) * 0.1 
-    antiutopico_cost = max(pareto_df['obj2']) + (max(pareto_df['obj2']) - min(pareto_df['obj2'])) * 0.1 
+    antiutopico_priority = max(pareto_df['obj1']) + (max(pareto_df['obj1']) - min(pareto_df['obj1'])) * 0
+    antiutopico_cost = max(pareto_df['obj2']) + (max(pareto_df['obj2']) - min(pareto_df['obj2'])) * 0
     utopic_cost = min(pareto_df['obj2'])
     utopic_priority = min(pareto_df['obj1'])
 
@@ -87,7 +87,7 @@ def generate_pareto(pareto_df, title='', decision=None, filtra_pareto=False):
     side_priority = antiutopico_priority - utopic_priority
     side_cost = antiutopico_cost - utopic_cost
     max_vol = side_priority * side_cost
-    S_metric = hipervolume / max_vol
+    H_normalized = hipervolume / max_vol
 
     # Utopic points as tuples
     utopic = (utopic_priority, utopic_cost)
@@ -105,6 +105,6 @@ def generate_pareto(pareto_df, title='', decision=None, filtra_pareto=False):
 
     
     print(f'Hipervolume : {hipervolume}')
-    # print(f'S_metric : {S_metric}')
+    print(f'HipervolumeNormalized : {H_normalized}')
     print(f'Delta_metric: {delta} ')
     print_pareto(pareto_df, title, utopic, antiutopic, decision)
